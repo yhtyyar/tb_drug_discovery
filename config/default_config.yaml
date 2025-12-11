@@ -1,0 +1,47 @@
+# TB Drug Discovery Pipeline Configuration
+# Default configuration for QSAR modeling
+
+# Reproducibility
+random_seed: 42
+
+# Data settings
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  chembl_target: "CHEMBL1849"  # InhA target
+  min_compounds: 500
+
+# QSAR model settings
+qsar:
+  n_estimators: 100
+  max_depth: null
+  min_samples_split: 2
+  min_samples_leaf: 1
+  test_size: 0.15
+  val_size: 0.15
+  n_folds: 5
+  activity_threshold: 6.0  # pIC50 threshold (IC50 = 1 µM)
+
+# Descriptor calculation
+descriptors:
+  lipinski: true
+  topological: true
+  extended: true
+
+# Output paths
+paths:
+  models: "models"
+  results: "results"
+  figures: "results/figures"
+  metrics: "results/metrics"
+  logs: "logs"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/pipeline.log"
+
+# Hardware
+hardware:
+  n_jobs: -1  # Use all CPUs
+  device: "cpu"  # cpu or cuda
