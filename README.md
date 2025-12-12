@@ -82,14 +82,29 @@ tb_drug_discovery/
 
 ## 📈 Results
 
-*Results will be updated as the project progresses.*
+| Phase | Status | Key Features |
+|-------|--------|--------------|
+| QSAR Baseline | ✅ Complete | Random Forest, ROC-AUC > 0.75 |
+| Molecular Docking | ✅ Complete | AutoDock Vina, TB targets (InhA, KatG, DprE1, MmpL3) |
+| GNN Training | ✅ Complete | GCN, GAT, MPNN, AttentiveFP, Ensemble |
+| Molecular Generation | ✅ Complete | SMILES VAE, Latent optimization |
 
-| Phase | Status | Metrics |
-|-------|--------|---------|
-| QSAR Baseline | 🔄 In Progress | - |
-| Molecular Docking | ⏳ Pending | - |
-| GNN Training | ⏳ Pending | - |
-| Molecular Generation | ⏳ Pending | - |
+## 🔧 Available Commands
+
+```bash
+# Phase 1: QSAR
+python scripts/download_data.py                    # Download ChEMBL data
+python scripts/train_qsar.py --data data.csv      # Train QSAR model
+
+# Phase 2: Docking
+python scripts/run_docking.py --target InhA --compounds compounds.csv
+
+# Phase 3: GNN
+python scripts/train_gnn.py --data data.csv --model gat
+
+# Phase 4: Generation
+python scripts/train_vae.py --data data.csv --generate 100
+```
 
 ## 🧪 Testing
 
@@ -134,4 +149,4 @@ PhD Candidate - Machine Learning for Drug Discovery
 
 ---
 
-**Version:** 0.1.0 (Phase 1: QSAR Baseline)
+**Version:** 0.4.0 (Phases 1-4 Complete)
