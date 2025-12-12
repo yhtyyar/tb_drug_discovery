@@ -1,7 +1,10 @@
 # TB Drug Discovery ML Pipeline
 
+**Machine Learning pipeline for Tuberculosis drug discovery targeting InhA enzyme.**
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tests](https://github.com/yhtyyar/tb_drug_discovery/actions/workflows/pytest.yml/badge.svg)](https://github.com/yhtyyar/tb_drug_discovery/actions)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 **Machine Learning Pipeline for Tuberculosis Drug Discovery**
