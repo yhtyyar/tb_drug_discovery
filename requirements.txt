@@ -18,6 +18,19 @@ joblib>=1.3.0
 torch>=2.0.0
 torch-geometric>=2.4.0
 
+# Gradient Boosting (for ensemble models)
+xgboost>=2.0.0
+lightgbm>=4.2.0
+# catboost>=1.2.0  # Optional, large dependency
+
+# Hyperparameter Optimization
+optuna>=3.4.0
+optuna-dashboard>=0.14.0
+
+# Experiment Tracking (optional)
+# mlflow>=2.9.0
+# wandb>=0.16.0
+
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
@@ -50,8 +63,11 @@ typing-extensions>=4.8.0
 # Logging
 loguru>=0.7.0
 
-# API requests (for ChEMBL)
+# API requests (for ChEMBL and AlphaFold)
 requests>=2.31.0
+
+# Bioinformatics (for AlphaFold integration)
+biopython>=1.82
 
 # Documentation
 sphinx>=7.0.0
@@ -60,6 +76,10 @@ sphinx-rtd-theme>=1.3.0
 # Optional: PyTorch Geometric dependencies
 # Install PyTorch first, then:
 # pip install torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-{TORCH_VERSION}+{CUDA_VERSION}.html
+
+# Optional: Diffusion Models
+# diffusers>=0.24.0
+# e3nn>=0.5.1  # Equivariant NN for 3D molecules
 
 # Molecular docking (install externally)
 # AutoDock Vina: https://vina.scripps.edu/downloads/
