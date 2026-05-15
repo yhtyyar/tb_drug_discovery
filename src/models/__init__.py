@@ -15,8 +15,17 @@ Classes:
 
 from .qsar_model import QSARModel
 from .calibration import QSARCalibrator
-from .applicability_domain import ApplicabilityDomain
+from .applicability_domain import BoundingBoxAD, LeverageAD, EnsembleAD
 from .active_learning import ActiveLearner, UCB, ExpectedImprovement, ThompsonSampling, MaxEntropy
+from .multitask_qsar import (
+    MultiTaskQSAR,
+    MultiTaskQSARSklearn,
+    MultiTaskConfig,
+    create_multitask_model,
+    evaluate_multitask,
+    TB_TARGETS,
+    DEFAULT_TARGETS,
+)
 
 try:
     from .chemberta import ChemBERTaFeaturizer, ChemBERTaQSAR, compare_representations
@@ -49,10 +58,19 @@ __all__ = [
     "OptimizationConfig",
     "run_full_optimization",
     "QSARCalibrator",
-    "ApplicabilityDomain",
+    "BoundingBoxAD",
+    "LeverageAD",
+    "EnsembleAD",
     "ActiveLearner",
     "UCB",
     "ExpectedImprovement",
     "ThompsonSampling",
     "MaxEntropy",
+    "MultiTaskQSAR",
+    "MultiTaskQSARSklearn",
+    "MultiTaskConfig",
+    "create_multitask_model",
+    "evaluate_multitask",
+    "TB_TARGETS",
+    "DEFAULT_TARGETS",
 ]

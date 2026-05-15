@@ -417,3 +417,232 @@ async def generation_metrics_endpoint(request: GenerationRequest):
         status_code=501,
         detail="Pass generated SMILES directly; use evaluate_generation() in Python code."
     )
+
+
+# ---------------------------------------------------------------------------
+# ADMET prediction endpoint
+# ---------------------------------------------------------------------------
+
+class ADMETRequest(BaseModel):
+    smiles: List[str] = Field(..., min_length=1, max_length=100, description="List of SMILES")
+
+    @validator("smiles", each_item=True)
+    def validate_smiles_len(cls, v: str) -> str:
+        if len(v) > 500:
+            raise ValueError(f"SMILES too long ({len(v)} > 500 chars)")
+        return v
+
+
+class ADMETEndpointResult(BaseModel):
+    smiles: str
+    solubility_log_s: float
+    bbb_penetration: float
+    herg_inhibition: float
+    ames_mutagenicity: float
+    hepatotoxicity: float
+    oral_bioavailability: float
+    qed: float
+    lipinski_pass: bool
+    admet_score: float
+    concerns: List[str]
+
+
+class ADMETResponse(BaseModel):
+    results: List[ADMETEndpointResult]
+    processing_time_s: float
+
+
+@app.post("/predict/admet", response_model=ADMETResponse, tags=["ADMET"])
+async def predict_admet(request: ADMETRequest):
+    """Run ADMET property prediction for a list of SMILES.
+
+    Returns absorption, distribution, metabolism, excretion, and toxicity
+    predictions for each compound plus a composite ADMET score.
+    """
+    t0 = time.time()
+    try:
+        from admet.predictor import ADMETPredictor
+        predictor = ADMETPredictor()
+    except ImportError:
+        raise HTTPException(status_code=503, detail="ADMET module not available")
+
+    results = []
+    for smi in request.smiles:
+        try:
+            r = predictor.predict(smi)
+            results.append(ADMETEndpointResult(
+                smiles=smi,
+                solubility_log_s=r.solubility_log_s,
+                bbb_penetration=r.bbb_penetration,
+                herg_inhibition=r.herg_inhibition,
+                ames_mutagenicity=r.ames_mutagenicity,
+                hepatotoxicity=r.hepatotoxicity,
+                oral_bioavailability=r.oral_bioavailability,
+                qed=r.qed,
+                lipinski_pass=r.lipinski_pass,
+                admet_score=r.admet_score,
+                concerns=r.flag_concerns(),
+            ))
+        except Exception as exc:
+            logger.warning("ADMET prediction failed for {}: {}", smi, exc)
+            results.append(ADMETEndpointResult(
+                smiles=smi,
+                solubility_log_s=0.0, bbb_penetration=0.0,
+                herg_inhibition=0.0, ames_mutagenicity=0.0,
+                hepatotoxicity=0.0, oral_bioavailability=0.0,
+                qed=0.0, lipinski_pass=False, admet_score=0.0,
+                concerns=["prediction_failed"],
+            ))
+
+    return ADMETResponse(
+        results=results,
+        processing_time_s=round(time.time() - t0, 3),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multi-task QSAR endpoint
+# ---------------------------------------------------------------------------
+
+class MultiTaskRequest(BaseModel):
+    smiles: List[str] = Field(..., min_length=1, max_length=500)
+    targets: List[str] = Field(
+        default=["InhA", "KatG", "rpoB", "DprE1", "MmpL3"],
+        description="TB targets to predict",
+    )
+    model_path: str = Field(
+        default="models/multitask/multitask_qsar.joblib",
+        description="Path to trained MultiTaskQSAR model",
+    )
+
+    @validator("smiles", each_item=True)
+    def validate_smiles_len(cls, v: str) -> str:
+        if len(v) > 500:
+            raise ValueError(f"SMILES too long")
+        return v
+
+
+class MultiTaskPrediction(BaseModel):
+    smiles: str
+    predictions: Dict[str, float]
+    uncertainties: Dict[str, float]
+
+
+class MultiTaskResponse(BaseModel):
+    results: List[MultiTaskPrediction]
+    targets: List[str]
+    processing_time_s: float
+
+
+@app.post("/predict/multitask", response_model=MultiTaskResponse, tags=["Multi-task QSAR"])
+async def predict_multitask(request: MultiTaskRequest):
+    """Multi-task QSAR prediction across TB protein targets.
+
+    Returns per-target activity probability and epistemic uncertainty
+    (MC-Dropout) for each input SMILES.
+    """
+    t0 = time.time()
+    import os
+
+    try:
+        from models.multitask_qsar import MultiTaskQSAR
+        from data.multitask_loader import compute_descriptors, MultiTaskDataset
+    except ImportError:
+        raise HTTPException(status_code=503, detail="MultiTaskQSAR module unavailable")
+
+    if not os.path.exists(request.model_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Multi-task model not found at {request.model_path}. "
+                   "Train it first with scripts/train_multitask.py",
+        )
+
+    model = MultiTaskQSAR.load(request.model_path)
+    dummy_ds = MultiTaskDataset(request.smiles, {t: np.full(len(request.smiles), np.nan) for t in request.targets})
+    X = compute_descriptors(dummy_ds)
+    proba = model.predict_proba(X)
+    unc = model.predict_uncertainty(X)
+
+    results = []
+    for i, smi in enumerate(request.smiles):
+        results.append(MultiTaskPrediction(
+            smiles=smi,
+            predictions={t: float(proba[t][i]) for t in model.targets if t in proba},
+            uncertainties={t: float(unc[t][i]) for t in model.targets if t in unc},
+        ))
+
+    return MultiTaskResponse(
+        results=results,
+        targets=model.targets,
+        processing_time_s=round(time.time() - t0, 3),
+    )
+
+
+# ---------------------------------------------------------------------------
+# SAR cliff analysis endpoint
+# ---------------------------------------------------------------------------
+
+class SARRequest(BaseModel):
+    smiles: List[str] = Field(..., min_length=2, max_length=1000)
+    activities: List[float] = Field(..., description="pIC50 values (NaN for unknown)")
+    target: str = Field(default="", description="Target name for provenance")
+    similarity_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    activity_threshold: float = Field(default=1.0, ge=0.0)
+
+
+class SARCliffResult(BaseModel):
+    smiles_a: str
+    smiles_b: str
+    similarity: float
+    delta_activity: float
+    cliff_score: float
+
+
+class SARResponse(BaseModel):
+    n_cliffs: int
+    cliffs: List[SARCliffResult]
+    mean_cliff_score: float
+    activity_landscape_index: float
+    processing_time_s: float
+
+
+@app.post("/analysis/sar-cliffs", response_model=SARResponse, tags=["SAR Analysis"])
+async def sar_cliff_analysis(request: SARRequest):
+    """Detect SAR activity cliffs in a compound dataset.
+
+    Returns pairs of structurally similar but activity-different compounds.
+    """
+    t0 = time.time()
+    try:
+        from analysis.sar_analysis import (
+            SARCliffConfig, detect_sar_cliffs, cliff_summary, activity_landscape_index
+        )
+    except ImportError:
+        raise HTTPException(status_code=503, detail="SAR analysis module unavailable")
+
+    if len(request.smiles) != len(request.activities):
+        raise HTTPException(status_code=400, detail="smiles and activities must have equal length")
+
+    acts = np.array(request.activities, dtype=np.float32)
+    cfg = SARCliffConfig(
+        similarity_threshold=request.similarity_threshold,
+        activity_threshold=request.activity_threshold,
+    )
+    cliffs = detect_sar_cliffs(request.smiles, acts, target=request.target, config=cfg)
+    summary = cliff_summary(cliffs)
+    ali = activity_landscape_index(request.smiles, acts)
+
+    return SARResponse(
+        n_cliffs=len(cliffs),
+        cliffs=[
+            SARCliffResult(
+                smiles_a=c.smiles_a, smiles_b=c.smiles_b,
+                similarity=c.similarity, delta_activity=c.delta_activity,
+                cliff_score=c.cliff_score,
+            )
+            for c in cliffs[:50]  # cap response size
+        ],
+        mean_cliff_score=summary.get("mean_cliff_score", 0.0),
+        activity_landscape_index=ali,
+        processing_time_s=round(time.time() - t0, 3),
+    )
