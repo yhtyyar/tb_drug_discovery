@@ -27,12 +27,20 @@ except ImportError:
     RDKIT_AVAILABLE = False
 
 
-def get_scaffold(smiles: str, generic: bool = False) -> Optional[str]:
+def get_scaffold(
+    smiles: str,
+    generic: bool = False,
+    include_chirality: bool = True,
+) -> Optional[str]:
     """Compute Bemis-Murcko scaffold for a SMILES string.
 
     Args:
         smiles: Input SMILES.
         generic: If True, return generic scaffold (all atoms → C).
+        include_chirality: If True, treat enantiomers as distinct scaffolds.
+            Chiral centres in the core ring system change binding geometry,
+            so the default (True) is the chemically correct choice. Set False
+            only when the dataset does not encode stereo information.
 
     Returns:
         Scaffold SMILES, or None if the molecule is invalid.
@@ -44,12 +52,14 @@ def get_scaffold(smiles: str, generic: bool = False) -> Optional[str]:
     if mol is None:
         return None
 
-    scaffold = MurckoScaffold.MurckoScaffoldSmilesFromSmiles(smiles)
-    if generic:
-        scaffold = MurckoScaffold.MakeScaffoldGeneric(Chem.MolFromSmiles(scaffold))
-        scaffold = Chem.MolToSmiles(scaffold) if scaffold else ""
+    scaffold_mol = MurckoScaffold.GetScaffoldForMol(mol)
+    if scaffold_mol is None:
+        return smiles  # acyclic molecules keep themselves
 
-    return scaffold if scaffold else smiles  # molecules without rings keep themselves
+    if generic:
+        scaffold_mol = MurckoScaffold.MakeScaffoldGeneric(scaffold_mol)
+
+    return Chem.MolToSmiles(scaffold_mol, isomericSmiles=include_chirality) or smiles
 
 
 def scaffold_split(

@@ -18,13 +18,14 @@ Clients (example with curl):
 
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    from fastapi import FastAPI, HTTPException, BackgroundTasks
+    from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Response
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel, Field, validator
     FASTAPI_AVAILABLE = True
@@ -34,6 +35,28 @@ except ImportError:
 
 import numpy as np
 from loguru import logger
+
+# Prometheus metrics (optional — graceful degradation if not installed)
+try:
+    from prometheus_client import (
+        Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST,
+    )
+    _req_counter = Counter(
+        "tb_api_requests_total",
+        "Total API requests",
+        ["method", "endpoint", "status"],
+    )
+    _req_latency = Histogram(
+        "tb_api_request_latency_seconds",
+        "Request latency in seconds",
+        ["endpoint"],
+        buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0),
+    )
+    _predictions_total = Counter("tb_api_predictions_total", "Total SMILES predictions made")
+    _invalid_smiles = Counter("tb_api_invalid_smiles_total", "SMILES that failed validation")
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    PROMETHEUS_AVAILABLE = False
 
 from data.chembl_loader import ChEMBLLoader
 from data.descriptor_calculator import DescriptorCalculator
@@ -58,6 +81,39 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    """Attach X-Correlation-ID to every request/response for tracing."""
+    correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+    t0 = time.time()
+
+    with logger.contextualize(correlation_id=correlation_id):
+        response = await call_next(request)
+
+    latency = time.time() - t0
+    response.headers["X-Correlation-ID"] = correlation_id
+    response.headers["X-Response-Time"] = f"{latency:.4f}s"
+
+    if PROMETHEUS_AVAILABLE:
+        endpoint = request.url.path
+        _req_counter.labels(
+            method=request.method,
+            endpoint=endpoint,
+            status=str(response.status_code),
+        ).inc()
+        _req_latency.labels(endpoint=endpoint).observe(latency)
+
+    return response
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics():
+    """Prometheus scrape endpoint — used by Grafana dashboards."""
+    if not PROMETHEUS_AVAILABLE:
+        raise HTTPException(status_code=501, detail="prometheus_client not installed")
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 # ---------------------------------------------------------------------------
 # Global model registry (lazy loading)
@@ -172,6 +228,8 @@ def _smiles_to_features(smiles: str) -> Optional[np.ndarray]:
 def _predict_one(smiles: str, model: QSARModel) -> MoleculeResult:
     canonical = _loader.standardize_smiles(smiles)
     if canonical is None:
+        if PROMETHEUS_AVAILABLE:
+            _invalid_smiles.inc()
         return MoleculeResult(smiles=smiles, valid=False, canonical_smiles=None,
                                predicted_pic50=None, predicted_active=None,
                                probability_active=None, error="Invalid SMILES")
@@ -183,6 +241,8 @@ def _predict_one(smiles: str, model: QSARModel) -> MoleculeResult:
                                probability_active=None, error="Descriptor calculation failed")
 
     try:
+        if PROMETHEUS_AVAILABLE:
+            _predictions_total.inc()
         if model.task == "regression":
             pic50 = float(model.predict(features)[0])
             active = pic50 >= 7.0

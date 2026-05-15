@@ -14,6 +14,8 @@ Classes:
 """
 
 from .qsar_model import QSARModel
+from .calibration import QSARCalibrator
+from .applicability_domain import ApplicabilityDomain
 from .ensemble import (
     VotingEnsemble,
     StackingEnsemble, 
@@ -39,4 +41,6 @@ __all__ = [
     "GNNOptimizer",
     "OptimizationConfig",
     "run_full_optimization",
+    "QSARCalibrator",
+    "ApplicabilityDomain",
 ]

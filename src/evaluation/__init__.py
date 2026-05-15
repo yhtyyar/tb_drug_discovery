@@ -17,7 +17,12 @@ from .metrics import (
     calculate_bedroc,
 )
 from .cross_validation import cross_validate_model, nested_cross_validation
-from .generation_metrics import evaluate_generation, compute_validity, compute_novelty
+from .generation_metrics import (
+    evaluate_generation,
+    compute_validity,
+    compute_novelty,
+    filter_pains,
+)
 from .conformal_prediction import ConformalPredictor, ClassificationConformalPredictor
 from .drift_detector import DescriptorDriftDetector
 
@@ -48,6 +53,7 @@ __all__ = [
     "evaluate_generation",
     "compute_validity",
     "compute_novelty",
+    "filter_pains",
     # Uncertainty
     "ConformalPredictor",
     "ClassificationConformalPredictor",

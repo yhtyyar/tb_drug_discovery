@@ -1,0 +1,164 @@
+# DVC pipeline for the TB Drug Discovery project.
+#
+# Stages are connected through deps/outs, so DVC can detect which
+# stages are stale and need re-running.  Run the full pipeline with:
+#   dvc repro
+#
+# Initialize once (creates .dvc/ and .dvcignore):
+#   dvc init
+#
+# Track raw data (replaces committing CSVs to git):
+#   dvc add data/raw/chembl_inhA_ic50.csv
+#   git add data/raw/chembl_inhA_ic50.csv.dvc data/raw/.gitignore
+#   git commit -m "dvc: track raw ChEMBL data"
+#
+# Push data to remote (S3 / GCS / SSH / local dir):
+#   dvc remote add -d myremote s3://my-bucket/dvc-store
+#   dvc push
+
+stages:
+  # ------------------------------------------------------------------
+  # Stage 1: Download / export ChEMBL data
+  # ------------------------------------------------------------------
+  fetch_data:
+    cmd: python scripts/fetch_chembl.py
+      --target CHEMBL1849
+      --output data/raw/chembl_inhA_ic50.csv
+    deps:
+      - scripts/fetch_chembl.py
+    outs:
+      - data/raw/chembl_inhA_ic50.csv
+    params:
+      - config/default_config.yaml:
+          - data.target_id
+          - data.min_potency
+
+  # ------------------------------------------------------------------
+  # Stage 2: Preprocess — standardize, deduplicate, compute pIC50
+  # ------------------------------------------------------------------
+  preprocess:
+    cmd: python scripts/preprocess.py
+      --input data/raw/chembl_inhA_ic50.csv
+      --output data/processed/cleaned_chembl_inhA.csv
+    deps:
+      - scripts/preprocess.py
+      - src/data/data_preprocessor.py
+      - src/data/mol_standardizer.py
+      - data/raw/chembl_inhA_ic50.csv
+    outs:
+      - data/processed/cleaned_chembl_inhA.csv
+    params:
+      - config/default_config.yaml:
+          - data.max_smiles_length
+          - data.pic50_threshold
+
+  # ------------------------------------------------------------------
+  # Stage 3: Compute molecular descriptors
+  # ------------------------------------------------------------------
+  compute_descriptors:
+    cmd: python scripts/compute_descriptors.py
+      --input data/processed/cleaned_chembl_inhA.csv
+      --output data/processed/descriptors_chembl_inhA.csv
+    deps:
+      - scripts/compute_descriptors.py
+      - src/data/descriptor_calculator.py
+      - data/processed/cleaned_chembl_inhA.csv
+    outs:
+      - data/processed/descriptors_chembl_inhA.csv
+
+  # ------------------------------------------------------------------
+  # Stage 4: Train QSAR model (scaffold split)
+  # ------------------------------------------------------------------
+  train_qsar:
+    cmd: python scripts/train_qsar.py
+      --data data/processed/descriptors_chembl_inhA.csv
+      --split scaffold
+      --task regression
+      --output models/qsar_model.joblib
+      --metrics-output results/qsar_metrics.json
+    deps:
+      - scripts/train_qsar.py
+      - src/models/qsar_model.py
+      - src/data/scaffold_split.py
+      - data/processed/descriptors_chembl_inhA.csv
+    outs:
+      - models/qsar_model.joblib
+    metrics:
+      - results/qsar_metrics.json:
+          cache: false
+    params:
+      - config/default_config.yaml:
+          - model.n_estimators
+          - model.max_depth
+          - splitting.method
+          - splitting.frac_train
+
+  # ------------------------------------------------------------------
+  # Stage 5: Train VAE generative model
+  # ------------------------------------------------------------------
+  train_vae:
+    cmd: python scripts/train_vae.py
+      --data data/processed/cleaned_chembl_inhA.csv
+      --latent-dim 256
+      --epochs 50
+      --kl-annealing
+      --output models/vae
+    deps:
+      - scripts/train_vae.py
+      - src/generation/vae.py
+      - src/generation/tokenizer.py
+      - data/processed/cleaned_chembl_inhA.csv
+    outs:
+      - models/vae/vae_model.pt
+      - models/vae/tokenizer.json
+    metrics:
+      - models/vae/vae_results.json:
+          cache: false
+    params:
+      - config/default_config.yaml:
+          - vae.latent_dim
+          - vae.hidden_dim
+          - vae.epochs
+
+  # ------------------------------------------------------------------
+  # Stage 6: Evaluate generation quality
+  # ------------------------------------------------------------------
+  evaluate_generation:
+    cmd: python scripts/evaluate_generation.py
+      --model models/vae/vae_model.pt
+      --tokenizer models/vae/tokenizer.json
+      --training-data data/processed/cleaned_chembl_inhA.csv
+      --n-samples 1000
+      --output results/generation_metrics.json
+    deps:
+      - scripts/evaluate_generation.py
+      - src/evaluation/generation_metrics.py
+      - models/vae/vae_model.pt
+      - models/vae/tokenizer.json
+    metrics:
+      - results/generation_metrics.json:
+          cache: false
+
+  # ------------------------------------------------------------------
+  # Stage 7: Generate HTML report
+  # ------------------------------------------------------------------
+  report:
+    cmd: python scripts/generate_report.py
+      --qsar-metrics results/qsar_metrics.json
+      --generation-metrics results/generation_metrics.json
+      --output results/report.html
+    deps:
+      - scripts/generate_report.py
+      - results/qsar_metrics.json
+      - results/generation_metrics.json
+    outs:
+      - results/report.html:
+          cache: false
+
+plots:
+  - results/qsar_metrics.json:
+      x: epoch
+      y: r2
+  - models/vae/vae_results.json:
+      x: epoch
+      y: val_loss

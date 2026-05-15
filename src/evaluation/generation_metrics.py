@@ -38,6 +38,15 @@ try:
 except Exception:
     SA_AVAILABLE = False
 
+try:
+    from rdkit.Chem.FilterCatalog import FilterCatalog, FilterCatalogParams
+    _pains_params = FilterCatalogParams()
+    _pains_params.AddCatalog(FilterCatalogParams.FilterCatalogs.PAINS)
+    _PAINS_CATALOG = FilterCatalog(_pains_params)
+    PAINS_AVAILABLE = True
+except Exception:
+    PAINS_AVAILABLE = False
+
 
 def compute_validity(smiles_list: List[str]) -> Tuple[float, List[str]]:
     """Compute validity fraction of generated SMILES.
@@ -326,6 +335,10 @@ def evaluate_generation(
     lipinski_stats = compute_lipinski_compliance(unique_smiles)
     results.update(lipinski_stats)
 
+    # PAINS filter
+    pains_stats = filter_pains(unique_smiles)
+    results.update(pains_stats)
+
     if verbose:
         logger.info(
             f"Generation metrics: "
@@ -334,7 +347,56 @@ def evaluate_generation(
             f"novelty={results.get('novelty', float('nan')):.1%}, "
             f"QED={results.get('qed_mean', 0):.3f}, "
             f"Ro5={results.get('ro5_pass_rate', 0):.1%}, "
-            f"diversity={results.get('diversity', 0):.3f}"
+            f"diversity={results.get('diversity', 0):.3f}, "
+            f"pains_pass={results.get('pains_pass_rate', float('nan')):.1%}"
         )
 
     return results
+
+
+def filter_pains(smiles_list: List[str]) -> Dict[str, float]:
+    """Filter molecules matching PAINS (Pan-Assay Interference Compounds) alerts.
+
+    PAINS are structural motifs that produce false positives in biochemical
+    assays through non-specific mechanisms (aggregation, redox cycling, etc.).
+    Generated molecules containing PAINS patterns are unsuitable for synthesis.
+
+    Args:
+        smiles_list: List of valid SMILES strings.
+
+    Returns:
+        Dict with pains_pass_rate, n_pains_pass, n_pains_fail, and list of alerts.
+
+    Example:
+        >>> stats = filter_pains(["c1ccc(cc1)C(=O)c1ccccc1", "CCO"])
+        >>> print(stats["pains_pass_rate"])  # fraction without PAINS alerts
+    """
+    if not RDKIT_AVAILABLE:
+        return {}
+
+    if not PAINS_AVAILABLE:
+        logger.debug("PAINS catalog not available — skipping PAINS filter")
+        return {}
+
+    n_pass = 0
+    n_fail = 0
+
+    for smi in smiles_list:
+        try:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                continue
+            entry = _PAINS_CATALOG.GetFirstMatch(mol)
+            if entry is None:
+                n_pass += 1
+            else:
+                n_fail += 1
+        except Exception:
+            pass
+
+    total = n_pass + n_fail
+    return {
+        "pains_pass_rate": n_pass / total if total else float("nan"),
+        "n_pains_pass": n_pass,
+        "n_pains_fail": n_fail,
+    }

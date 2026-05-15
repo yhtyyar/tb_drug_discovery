@@ -1,0 +1,22 @@
+# DVC ignore file — patterns here are excluded from DVC tracking
+# Same syntax as .gitignore
+
+# Python cache
+**/__pycache__
+**/*.py[cod]
+**/*.pyo
+
+# Jupyter checkpoints
+**/.ipynb_checkpoints
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+
+# Log files (tracked by loguru, not DVC)
+**/*.log
+logs/
