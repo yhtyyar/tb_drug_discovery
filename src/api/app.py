@@ -62,6 +62,7 @@ from data.chembl_loader import ChEMBLLoader
 from data.descriptor_calculator import DescriptorCalculator
 from models.qsar_model import QSARModel
 from evaluation.generation_metrics import evaluate_generation
+from evaluation.drift_detector import DescriptorDriftDetector
 
 # ---------------------------------------------------------------------------
 # Application
@@ -146,19 +147,58 @@ def get_qsar_model(model_path: str = "models/qsar_model.pkl") -> Optional[QSARMo
     return _registry["qsar_model"]  # type: ignore
 
 
+def _background_drift_check(feature_matrix: np.ndarray) -> None:
+    """Run KS-test drift detection in background after each prediction batch.
+
+    Compares incoming descriptor distribution against a reference stored at
+    models/drift_reference.npy. Logs a WARNING if drift is detected.
+    Designed to be non-blocking — called via FastAPI BackgroundTasks.
+    """
+    ref_path = Path("models/drift_reference.npy")
+    if not ref_path.exists():
+        return
+
+    try:
+        ref_data = np.load(str(ref_path))
+        detector = DescriptorDriftDetector(significance_level=0.01)
+        detector.fit(ref_data)
+        result = detector.detect(feature_matrix)
+
+        if result.get("drift_detected"):
+            n_drifted = result.get("n_drifted_features", 0)
+            logger.warning(
+                f"[DRIFT] {n_drifted} features drifted vs reference "
+                f"(p<0.01, batch_size={len(feature_matrix)}). "
+                "Model predictions may be unreliable — consider retraining."
+            )
+        else:
+            logger.debug(f"[DRIFT] No drift detected (batch_size={len(feature_matrix)})")
+    except Exception as e:
+        logger.debug(f"[DRIFT] Background check failed: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+
+_MAX_SMILES_LEN = 500  # longest drug-like molecule rarely exceeds 200 chars
+
 
 class ActivityRequest(BaseModel):
     smiles: List[str] = Field(..., min_items=1, max_items=10_000, description="List of SMILES")
     model_path: str = Field("models/qsar_model.pkl", description="Path to trained QSAR model")
 
     @validator("smiles", each_item=True)
-    def smiles_not_empty(cls, v):
+    def validate_smiles_string(cls, v):
         if not v or not v.strip():
             raise ValueError("SMILES must not be empty")
-        return v.strip()
+        v = v.strip()
+        if len(v) > _MAX_SMILES_LEN:
+            raise ValueError(
+                f"SMILES too long ({len(v)} chars > {_MAX_SMILES_LEN}). "
+                "Likely invalid or an injection attempt."
+            )
+        return v
 
 
 class MoleculeResult(BaseModel):
@@ -281,11 +321,16 @@ async def model_info():
         "is_fitted": model.is_fitted,
         "n_features": len(model.feature_names or []),
         "training_metrics": model.training_metrics,
+        # Reproducibility provenance
+        "git_commit": getattr(model, "git_commit", "unknown"),
+        "saved_at": getattr(model, "saved_at", "unknown"),
+        "training_data_hash": getattr(model, "training_data_hash", None),
+        "n_training_samples": getattr(model, "n_training_samples", None),
     }
 
 
 @app.post("/predict/activity", response_model=ActivityResponse)
-async def predict_activity(request: ActivityRequest):
+async def predict_activity(request: ActivityRequest, background_tasks: BackgroundTasks):
     t0 = time.time()
     model = get_qsar_model(request.model_path)
     if model is None:
@@ -295,6 +340,19 @@ async def predict_activity(request: ActivityRequest):
     n_valid = sum(r.valid for r in results)
     n_predicted = sum(r.predicted_pic50 is not None or r.predicted_active is not None
                       for r in results)
+
+    # Async drift detection — does not block the response
+    valid_results = [r for r in results if r.valid and r.error is None]
+    if valid_results and model.feature_names:
+        feat_matrix = np.array([
+            [_smiles_to_features(r.canonical_smiles or r.smiles)]
+            for r in valid_results
+            if _smiles_to_features(r.canonical_smiles or r.smiles) is not None
+        ])
+        if feat_matrix.ndim == 3:
+            feat_matrix = feat_matrix.squeeze(1)
+        if feat_matrix.size > 0:
+            background_tasks.add_task(_background_drift_check, feat_matrix)
 
     return ActivityResponse(
         results=results,

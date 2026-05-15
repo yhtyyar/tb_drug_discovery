@@ -31,56 +31,60 @@ except ImportError:
 
 def validate_smiles(smiles: str) -> bool:
     """Check if SMILES is valid.
-    
+
     Args:
         smiles: SMILES string.
-        
+
     Returns:
         True if valid, False otherwise.
     """
+    if not smiles or not isinstance(smiles, str):
+        return False
+
     if not HAS_RDKIT:
         return len(smiles) > 0
-    
+
     try:
         mol = Chem.MolFromSmiles(smiles)
         return mol is not None
-    except:
+    except Exception:
         return False
 
 
 def calculate_properties(smiles: str) -> Dict:
     """Calculate molecular properties.
-    
+
     Args:
         smiles: SMILES string.
-        
+
     Returns:
         Dictionary of properties.
     """
     if not HAS_RDKIT:
-        return {'valid': False}
-    
+        return {"valid": False}
+
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return {'valid': False}
-        
+            return {"valid": False}
+
         return {
-            'valid': True,
-            'smiles': Chem.MolToSmiles(mol),  # Canonical
-            'mw': Descriptors.MolWt(mol),
-            'logp': Descriptors.MolLogP(mol),
-            'hbd': Descriptors.NumHDonors(mol),
-            'hba': Descriptors.NumHAcceptors(mol),
-            'tpsa': Descriptors.TPSA(mol),
-            'rotatable_bonds': Descriptors.NumRotatableBonds(mol),
-            'rings': Descriptors.RingCount(mol),
-            'qed': QED.qed(mol),
-            'num_atoms': mol.GetNumAtoms(),
-            'num_heavy_atoms': mol.GetNumHeavyAtoms(),
+            "valid": True,
+            "smiles": Chem.MolToSmiles(mol),
+            "mw": Descriptors.MolWt(mol),
+            "logp": Descriptors.MolLogP(mol),
+            "hbd": Descriptors.NumHDonors(mol),
+            "hba": Descriptors.NumHAcceptors(mol),
+            "tpsa": Descriptors.TPSA(mol),
+            "rotatable_bonds": Descriptors.NumRotatableBonds(mol),
+            "rings": Descriptors.RingCount(mol),
+            "qed": QED.qed(mol),
+            "num_atoms": mol.GetNumAtoms(),
+            "num_heavy_atoms": mol.GetNumHeavyAtoms(),
         }
     except Exception as e:
-        return {'valid': False, 'error': str(e)}
+        logger.debug(f"Property calculation failed for '{smiles}': {e}")
+        return {"valid": False, "error": str(e)}
 
 
 def get_scaffold(smiles: str) -> Optional[str]:

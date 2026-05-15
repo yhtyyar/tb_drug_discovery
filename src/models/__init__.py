@@ -16,6 +16,13 @@ Classes:
 from .qsar_model import QSARModel
 from .calibration import QSARCalibrator
 from .applicability_domain import ApplicabilityDomain
+from .active_learning import ActiveLearner, UCB, ExpectedImprovement, ThompsonSampling, MaxEntropy
+
+try:
+    from .chemberta import ChemBERTaFeaturizer, ChemBERTaQSAR, compare_representations
+    _HAS_CHEMBERTA = True
+except ImportError:
+    _HAS_CHEMBERTA = False
 from .ensemble import (
     VotingEnsemble,
     StackingEnsemble, 
@@ -43,4 +50,9 @@ __all__ = [
     "run_full_optimization",
     "QSARCalibrator",
     "ApplicabilityDomain",
+    "ActiveLearner",
+    "UCB",
+    "ExpectedImprovement",
+    "ThompsonSampling",
+    "MaxEntropy",
 ]

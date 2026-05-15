@@ -4,9 +4,11 @@ This module provides a scikit-learn based QSAR model for predicting
 molecular activity (pIC50) against TB targets.
 """
 
+import hashlib
 import json
+import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 import joblib
 import numpy as np
@@ -14,7 +16,23 @@ import pandas as pd
 from loguru import logger
 from sklearn import __version__ as sklearn_version
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.model_selection import cross_val_score, cross_val_predict
+
+
+def _git_commit_hash() -> str:
+    """Return current HEAD commit hash, or 'unknown' if not in a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _array_hash(X: np.ndarray) -> str:
+    """SHA-256 of a numpy array — used to identify training data."""
+    return hashlib.sha256(X.tobytes()).hexdigest()[:16]
 
 
 class QSARModel:
@@ -375,17 +393,20 @@ class QSARModel:
             plt.close()
             logger.info(f"SHAP summary plot saved to {save_path}")
 
-    def save(self, path: str) -> None:
-        """Save trained model to file.
+    def save(self, path: str, X_train: Optional[np.ndarray] = None) -> None:
+        """Save trained model to file with full reproducibility metadata.
 
         Args:
-            path: Path to save model (joblib format - safer than pickle).
+            path: Path to save model (joblib format).
+            X_train: Training feature matrix — if provided, its SHA-256 hash
+                is stored so you can verify the same data was used later.
         """
         if not self.is_fitted:
             raise ValueError("Model not fitted. Cannot save.")
 
         Path(path).parent.mkdir(parents=True, exist_ok=True)
 
+        from datetime import datetime, timezone
         state = {
             "model": self.model,
             "task": self.task,
@@ -393,11 +414,19 @@ class QSARModel:
             "feature_names": self.feature_names,
             "training_metrics": self.training_metrics,
             "random_seed": self.random_seed,
-            "sklearn_version": sklearn_version,  # For compatibility checking
+            "sklearn_version": sklearn_version,
+            # Reproducibility metadata
+            "git_commit": _git_commit_hash(),
+            "saved_at": datetime.now(timezone.utc).isoformat(),
+            "training_data_hash": _array_hash(X_train) if X_train is not None else None,
+            "n_training_samples": X_train.shape[0] if X_train is not None else None,
         }
 
-        joblib.dump(state, path, compress=3)  # compress=3 reduces size ~3x
-        logger.info(f"Model saved to {path} (joblib, sklearn={sklearn_version})")
+        joblib.dump(state, path, compress=3)
+        logger.info(
+            f"Model saved to {path} "
+            f"(sklearn={sklearn_version}, git={state['git_commit']})"
+        )
     
     @classmethod
     def load(cls, path: str) -> "QSARModel":
@@ -428,8 +457,16 @@ class QSARModel:
         instance.feature_names = state["feature_names"]
         instance.training_metrics = state["training_metrics"]
         instance.is_fitted = True
+        # Expose provenance metadata
+        instance.git_commit = state.get("git_commit", "unknown")
+        instance.saved_at = state.get("saved_at", "unknown")
+        instance.training_data_hash = state.get("training_data_hash")
+        instance.n_training_samples = state.get("n_training_samples")
 
-        logger.info(f"Model loaded from {path} (joblib)")
+        logger.info(
+            f"Model loaded from {path} "
+            f"(git={instance.git_commit}, saved={instance.saved_at})"
+        )
         return instance
     
     def save_metrics(self, path: str, metrics: Dict[str, float]) -> None:
