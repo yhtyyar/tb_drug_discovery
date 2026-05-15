@@ -17,6 +17,7 @@ Requirements:
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -27,6 +28,13 @@ import torch
 from loguru import logger
 
 from src.utils.logger import setup_logger
+
+# Optional MLflow tracking
+try:
+    import mlflow
+    HAS_MLFLOW = True
+except ImportError:
+    HAS_MLFLOW = False
 
 
 def parse_args():
@@ -119,10 +127,11 @@ Examples:
         help="Use KL annealing (default: True)"
     )
     parser.add_argument(
-        "--kl-warmup",
-        type=int,
-        default=10,
-        help="KL annealing warmup epochs (default: 10)"
+        "--kl-strategy",
+        type=str,
+        choices=["linear", "cyclical"],
+        default="linear",
+        help="KL annealing strategy (default: linear)"
     )
     parser.add_argument(
         "--seed",
@@ -152,7 +161,21 @@ Examples:
         default="models/vae",
         help="Output directory (default: models/vae)"
     )
-    
+
+    parser.add_argument(
+        "--use-mlflow",
+        action="store_true",
+        default=False,
+        help="Enable MLflow experiment tracking",
+    )
+
+    parser.add_argument(
+        "--experiment-name",
+        type=str,
+        default="tb-vae",
+        help="MLflow experiment name",
+    )
+
     return parser.parse_args()
 
 
@@ -176,10 +199,31 @@ def main():
     logger.info("SMILES VAE TRAINING")
     logger.info("=" * 60)
     logger.info(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
-    
+
+    # Initialize MLflow if requested
+    mlflow_run = None
+    if args.use_mlflow and HAS_MLFLOW:
+        mlflow.set_experiment(args.experiment_name)
+        mlflow_run = mlflow.start_run(run_name=f"vae-{datetime.now():%Y%m%d-%H%M%S}")
+        logger.info(f"MLflow tracking enabled: {mlflow.get_tracking_uri()}")
+
+        # Log parameters
+        mlflow.log_params({
+            "latent_dim": args.latent_dim,
+            "hidden_dim": args.hidden_dim,
+            "embed_dim": args.embed_dim,
+            "num_layers": args.num_layers,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "kl_annealing": args.kl_annealing,
+            "kl_strategy": args.kl_strategy,
+            "max_length": args.max_length,
+        })
+
     # Import modules
     from src.generation.tokenizer import SmilesTokenizer, get_smiles_statistics
-    from src.generation.vae import SmilesVAE
+    from src.generation.vae import SmilesVAE, KLAnnealer
     from src.generation.generator import MoleculeGenerator, validate_smiles
     
     # Step 1: Load data
@@ -227,19 +271,29 @@ def main():
     
     # Step 4: Train
     logger.info("\nStep 4: Training...")
-    
+
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     generator = MoleculeGenerator(tokenizer, vae)
-    
+
+    # Create KL Annealer if enabled
+    kl_annealer = None
+    if args.kl_annealing:
+        kl_annealer = KLAnnealer(
+            n_epochs=args.epochs,
+            start=0.0,
+            end=1.0,
+            strategy=args.kl_strategy,
+        )
+        logger.info(f"KL Annealing: {args.kl_strategy} strategy")
+
     history = generator.train(
         smiles_list=valid_smiles,
         epochs=args.epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         kl_annealing=args.kl_annealing,
-        kl_warmup=args.kl_warmup,
         checkpoint_dir=str(output_dir),
         verbose=1,
     )
@@ -300,21 +354,48 @@ def main():
             'max_length': args.max_length,
         },
     }
-    
+
     with open(output_dir / "vae_results.json", 'w') as f:
         json.dump(results, f, indent=2, default=float)
-    
+
+    # MLflow logging
+    if args.use_mlflow and HAS_MLFLOW and mlflow_run:
+        # Log metrics
+        mlflow.log_metrics({
+            "reconstruction_accuracy": recon_accuracy,
+            "validity": metrics.get('validity', 0),
+            "uniqueness": metrics.get('uniqueness', 0),
+            "novelty": metrics.get('novelty', 0),
+            "avg_qed": metrics.get('avg_qed', 0),
+            "final_train_loss": history['train_loss'][-1],
+            "final_val_loss": history['val_loss'][-1],
+        })
+
+        # Log model
+        mlflow.pytorch.log_model(vae, "vae_model")
+
+        # Log artifacts
+        mlflow.log_artifact(str(output_dir / "vae_model.pt"))
+        mlflow.log_artifact(str(output_dir / "tokenizer.json"))
+        mlflow.log_artifact(str(output_dir / "vae_results.json"))
+
+        # End run
+        mlflow.end_run()
+
     # Summary
     logger.info("\n" + "=" * 60)
     logger.info("TRAINING COMPLETE")
     logger.info("=" * 60)
     logger.info(f"Generated {len(generated)} valid molecules")
-    
+
     target_validity = metrics.get('validity', 0) >= 0.90
     logger.info(f"Target (validity >= 90%): {'✅ PASSED' if target_validity else '❌ NOT MET'}")
-    
+
     logger.info(f"\nArtifacts saved to: {output_dir}")
-    
+
+    if args.use_mlflow and HAS_MLFLOW:
+        logger.info(f"MLflow: {mlflow.get_tracking_uri()}")
+
     return 0
 
 

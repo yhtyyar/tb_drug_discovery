@@ -1,0 +1,41 @@
+# Dockerfile for Jupyter development environment
+# Includes all dependencies for experimentation
+
+FROM python:3.10-slim
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    libxrender1 \
+    libxext6 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Install Jupyter-specific packages
+RUN pip install --no-cache-dir \
+    jupyterlab==4.0.10 \
+    jupyterlab-git==0.50.0 \
+    ipywidgets==8.1.1 \
+    plotly==5.18.0
+
+# Configure Jupyter
+RUN jupyter labextension disable @jupyterlab/apputils-extension:announcements
+
+ENV PYTHONPATH=/app/src
+ENV JUPYTER_CONFIG_DIR=/app/.jupyter
+
+# Create config directory
+RUN mkdir -p /app/.jupyter
+
+EXPOSE 8888
+
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''"]

@@ -1,0 +1,100 @@
+# Docker Compose for TB Drug Discovery Pipeline
+# Optimized for local development with Docker Desktop
+
+version: '3.8'
+
+services:
+  # Main API service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - PYTHON_VERSION=3.10
+    image: tb-drug-discovery:latest
+    container_name: tb-drug-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount models directory for persistence
+      - ./models:/app/models:ro
+      # Mount data directory
+      - ./data:/app/data:ro
+      # Optional: mount source for development
+      # - ./src:/app/src
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=INFO
+      - WORKERS=2  # Adjust based on CPU cores
+    command: uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+
+  # Optional: Jupyter Notebook for experiments
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    image: tb-drug-jupyter:latest
+    container_name: tb-drug-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./:/app
+      - ./notebooks:/app/notebooks
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=  # Empty for no token (dev only)
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+    profiles:
+      - jupyter  # Only start when explicitly requested
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+  # Optional: MLflow tracking server
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.0
+    container_name: tb-drug-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+      - ./mlartifacts:/mlartifacts
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=sqlite:///mlruns/mlflow.db
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=/mlartifacts
+    command: mlflow server --host 0.0.0.0 --port 5000
+    profiles:
+      - mlflow
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+# Persistent volumes
+volumes:
+  models:
+    driver: local
+  mlruns:
+    driver: local
+  mlartifacts:
+    driver: local

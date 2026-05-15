@@ -5,13 +5,14 @@ molecular activity (pIC50) against TB targets.
 """
 
 import json
-import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import joblib
 import numpy as np
 import pandas as pd
 from loguru import logger
+from sklearn import __version__ as sklearn_version
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import cross_val_score, cross_val_predict
 
@@ -182,31 +183,32 @@ class QSARModel:
         
         if self.task == "regression":
             from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
-            
+
             metrics = {
                 "r2": float(r2_score(y, y_pred)),
                 "rmse": float(np.sqrt(mean_squared_error(y, y_pred))),
                 "mae": float(mean_absolute_error(y, y_pred)),
                 "n_samples": len(y),
             }
-            
+
         else:  # classification
             from sklearn.metrics import (
-                accuracy_score, roc_auc_score, precision_score,
-                recall_score, f1_score, confusion_matrix
+                accuracy_score, average_precision_score, roc_auc_score,
+                precision_score, recall_score, f1_score, confusion_matrix,
             )
-            
+
             y_proba = self.predict_proba(X)[:, 1]
-            
+
             metrics = {
                 "accuracy": float(accuracy_score(y, y_pred)),
                 "roc_auc": float(roc_auc_score(y, y_proba)),
+                "pr_auc": float(average_precision_score(y, y_proba)),
                 "precision": float(precision_score(y, y_pred, zero_division=0)),
                 "recall": float(recall_score(y, y_pred, zero_division=0)),
                 "f1": float(f1_score(y, y_pred, zero_division=0)),
                 "n_samples": len(y),
             }
-            
+
             # Confusion matrix
             cm = confusion_matrix(y, y_pred)
             metrics["tn"], metrics["fp"] = int(cm[0, 0]), int(cm[0, 1])
@@ -295,20 +297,95 @@ class QSARModel:
         
         if top_n is not None:
             df = df.head(top_n)
-        
+
         return df
-    
+
+    def explain_shap(
+        self,
+        X: np.ndarray,
+        n_background: int = 100,
+    ) -> np.ndarray:
+        """Compute SHAP values for feature importance explanation.
+
+        Uses TreeExplainer for Random Forest models to explain
+        which structural fragments drive activity predictions.
+        Essential for collaboration with chemists.
+
+        Args:
+            X: Feature matrix to explain.
+            n_background: Background dataset size for TreeExplainer.
+
+        Returns:
+            SHAP values array of shape (n_samples, n_features).
+
+        Example:
+            >>> shap_values = model.explain_shap(X_test[:50])
+            >>> # Visualize: shap.summary_plot(shap_values, X_test[:50],
+            >>> #                             feature_names=model.feature_names)
+        """
+        if not self.is_fitted:
+            raise ValueError("Model not fitted. Call fit() first.")
+
+        try:
+            import shap
+        except ImportError:
+            raise ImportError("shap package required. Install: pip install shap")
+
+        # Use TreeExplainer for Random Forest (fast, exact)
+        explainer = shap.TreeExplainer(self.model)
+        shap_values = explainer.shap_values(X)
+
+        # For classification, shap_values is a list [class0, class1]
+        # Return class 1 ("active") SHAP values for interpretation
+        if isinstance(shap_values, list):
+            return shap_values[1]
+        return shap_values
+
+    def plot_shap_summary(
+        self,
+        X: np.ndarray,
+        save_path: Optional[str] = None,
+        max_display: int = 20,
+    ) -> None:
+        """Generate SHAP summary plot for model interpretation.
+
+        Args:
+            X: Feature matrix to explain.
+            save_path: Path to save plot (None = display interactively).
+            max_display: Number of top features to display.
+        """
+        try:
+            import shap
+            import matplotlib.pyplot as plt
+        except ImportError:
+            raise ImportError("shap and matplotlib required. Install: pip install shap matplotlib")
+
+        shap_values = self.explain_shap(X)
+
+        shap.summary_plot(
+            shap_values,
+            X,
+            feature_names=self.feature_names,
+            max_display=max_display,
+            show=save_path is None,
+        )
+
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches="tight")
+            plt.close()
+            logger.info(f"SHAP summary plot saved to {save_path}")
+
     def save(self, path: str) -> None:
         """Save trained model to file.
-        
+
         Args:
-            path: Path to save model (pickle format).
+            path: Path to save model (joblib format - safer than pickle).
         """
         if not self.is_fitted:
             raise ValueError("Model not fitted. Cannot save.")
-        
+
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        
+
         state = {
             "model": self.model,
             "task": self.task,
@@ -316,26 +393,32 @@ class QSARModel:
             "feature_names": self.feature_names,
             "training_metrics": self.training_metrics,
             "random_seed": self.random_seed,
+            "sklearn_version": sklearn_version,  # For compatibility checking
         }
-        
-        with open(path, "wb") as f:
-            pickle.dump(state, f)
-        
-        logger.info(f"Model saved to {path}")
+
+        joblib.dump(state, path, compress=3)  # compress=3 reduces size ~3x
+        logger.info(f"Model saved to {path} (joblib, sklearn={sklearn_version})")
     
     @classmethod
     def load(cls, path: str) -> "QSARModel":
         """Load trained model from file.
-        
+
         Args:
-            path: Path to saved model.
-            
+            path: Path to saved model (joblib format).
+
         Returns:
             Loaded QSARModel instance.
         """
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        
+        state = joblib.load(path)
+
+        # Check sklearn version compatibility
+        saved_version = state.get("sklearn_version")
+        if saved_version and saved_version != sklearn_version:
+            logger.warning(
+                f"sklearn version mismatch: saved={saved_version}, "
+                f"current={sklearn_version}. May cause compatibility issues."
+            )
+
         instance = cls(
             task=state["task"],
             random_seed=state["random_seed"],
@@ -345,8 +428,8 @@ class QSARModel:
         instance.feature_names = state["feature_names"]
         instance.training_metrics = state["training_metrics"]
         instance.is_fitted = True
-        
-        logger.info(f"Model loaded from {path}")
+
+        logger.info(f"Model loaded from {path} (joblib)")
         return instance
     
     def save_metrics(self, path: str, metrics: Dict[str, float]) -> None:

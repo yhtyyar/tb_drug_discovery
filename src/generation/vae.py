@@ -24,6 +24,45 @@ import torch.nn.functional as F
 from loguru import logger
 
 
+class KLAnnealer:
+    """Linear or cyclical KL weight schedule for VAE training.
+
+    Prevents posterior collapse by gradually increasing KL weight.
+    Without annealing, KL loss "crushes" the encoder early in training,
+    forcing it to zero out information.
+
+    Args:
+        n_epochs: Total number of training epochs.
+        start: Initial KL weight.
+        end: Final KL weight.
+        strategy: 'linear' or 'cyclical' schedule.
+
+    Example:
+        >>> annealer = KLAnnealer(n_epochs=100, start=0.0, end=1.0, strategy="linear")
+        >>> for epoch in range(100):
+        ...     kl_weight = annealer.get_weight(epoch)
+        ...     loss = recon_loss + kl_weight * kl_loss
+    """
+
+    def __init__(self, n_epochs: int, start: float = 0.0, end: float = 1.0,
+                 strategy: str = "linear"):
+        self.n_epochs = n_epochs
+        self.start = start
+        self.end = end
+        self.strategy = strategy
+
+    def get_weight(self, epoch: int) -> float:
+        """Get KL weight for given epoch."""
+        if self.strategy == "linear":
+            return min(self.end, self.start + (self.end - self.start) * epoch / self.n_epochs)
+        elif self.strategy == "cyclical":
+            # 4 cycles over training
+            cycle = self.n_epochs // 4
+            pos = epoch % cycle
+            return min(self.end, self.start + (self.end - self.start) * pos / cycle)
+        return self.end
+
+
 class VAEEncoder(nn.Module):
     """GRU-based encoder for SMILES VAE.
     

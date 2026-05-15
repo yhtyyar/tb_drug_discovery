@@ -106,3 +106,24 @@ credentials.yaml
 # Results that should be regenerated
 results/figures/*.png
 results/figures/*.pdf
+
+# Training logs
+training.log
+logs/
+*.log
+
+# Trained model artifacts (use DVC or release assets instead)
+models/vae/
+models/diffusion/
+models/*.pt
+models/*.pth
+models/*.ckpt
+models/*.joblib
+mlruns/
+mlartifacts/
+
+# Docker runtime
+.dockerignore.local
+
+# Debug logs
+firebase-debug.log

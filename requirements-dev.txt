@@ -1,0 +1,42 @@
+# Development dependencies for TB Drug Discovery Pipeline
+# Install with: pip install -r requirements-dev.txt
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.0.0
+pytest-xdist>=3.5.0
+hypothesis>=6.100.0
+
+# Code quality
+black>=23.12.0
+isort>=5.13.0
+flake8>=7.0.0
+mypy>=1.7.0
+
+# Documentation
+sphinx>=7.2.0
+sphinx-autodoc-typehints>=1.25.0
+sphinx-rtd-theme>=2.0.0
+
+# Jupyter
+jupyter>=1.0.0
+ipykernel>=6.27.0
+nbval>=0.10.0
+
+# Profiling and debugging
+line_profiler>=4.1.0
+memory_profiler>=0.61.0
+py-spy>=0.3.14
+
+# MLflow for experiment tracking
+mlflow>=2.10.0
+
+# SHAP for model interpretation
+shap>=0.44.0
+
+# Optional: torch-scatter for efficient GNN operations
+# Install with: pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+cpu.html
+torch-scatter
+
+# Pre-commit hooks
+pre-commit>=3.6.0

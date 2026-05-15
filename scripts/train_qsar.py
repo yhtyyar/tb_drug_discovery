@@ -22,6 +22,7 @@ Example:
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add src to path
@@ -34,10 +35,19 @@ from loguru import logger
 from data.chembl_loader import ChEMBLLoader
 from data.descriptor_calculator import DescriptorCalculator
 from data.data_preprocessor import DataPreprocessor
+from data.scaffold_split import scaffold_split_df
 from models.qsar_model import QSARModel
 from evaluation.cross_validation import cross_validate_model
 from utils.config import Config
 from utils.logger import setup_logger
+
+# Optional MLflow tracking
+try:
+    import mlflow
+    import mlflow.sklearn
+    HAS_MLFLOW = True
+except ImportError:
+    HAS_MLFLOW = False
 
 
 def parse_args():
@@ -102,19 +112,58 @@ def parse_args():
         default=None,
         help="Path to YAML configuration file",
     )
-    
+
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=["random", "scaffold"],
+        default="random",
+        help="Data splitting strategy (default: random)",
+    )
+
+    parser.add_argument(
+        "--use-mlflow",
+        action="store_true",
+        default=False,
+        help="Enable MLflow experiment tracking",
+    )
+
+    parser.add_argument(
+        "--experiment-name",
+        type=str,
+        default="tb-qsar",
+        help="MLflow experiment name",
+    )
+
     return parser.parse_args()
 
 
 def main():
     """Main training pipeline."""
     args = parse_args()
-    
+
     # Setup logging
     setup_logger(level="INFO")
     logger.info("=" * 60)
     logger.info("TB Drug Discovery - QSAR Training Pipeline")
     logger.info("=" * 60)
+
+    # Initialize MLflow if requested
+    mlflow_run = None
+    if args.use_mlflow and HAS_MLFLOW:
+        mlflow.set_experiment(args.experiment_name)
+        mlflow_run = mlflow.start_run(run_name=f"{args.task}-{args.split}-{datetime.now():%Y%m%d-%H%M%S}")
+        logger.info(f"MLflow tracking enabled: {mlflow.get_tracking_uri()}")
+
+        # Log parameters
+        mlflow.log_params({
+            "task": args.task,
+            "split_strategy": args.split,
+            "n_estimators": args.n_estimators,
+            "threshold": args.threshold,
+            "n_folds": args.n_folds,
+            "seed": args.seed,
+        })
     
     # Load configuration
     config = Config(args.config)
@@ -182,18 +231,60 @@ def main():
     X = df_train[feature_cols].values
     y = df_train[target_col].values
     
-    # Split data
-    preprocessor = DataPreprocessor(random_seed=args.seed)
-    X_train, X_test, y_train, y_test = preprocessor.split_data_simple(
-        X, y, test_size=0.2, stratify=(args.task == "classification")
-    )
-    
+    # Split data (random or scaffold)
+    if args.split == "scaffold":
+        logger.info("Using scaffold-based splitting...")
+        # Create dataframe for scaffold split
+        split_df = pd.DataFrame({
+            "smiles": df_train["smiles"].values,
+            "X": list(X),
+            "y": y,
+        })
+
+        train_df, val_df, test_df = scaffold_split_df(
+            split_df,
+            smiles_col="smiles",
+            frac_train=0.7,
+            frac_val=0.1,
+            frac_test=0.2,
+            random_seed=args.seed,
+        )
+
+        X_train = np.vstack(train_df["X"].values)
+        X_test = np.vstack(test_df["X"].values)
+        y_train = train_df["y"].values
+        y_test = test_df["y"].values
+
+        # Validation set
+        X_val = np.vstack(val_df["X"].values)
+        y_val = val_df["y"].values
+
+        if args.use_mlflow and HAS_MLFLOW and mlflow_run:
+            mlflow.log_params({
+                "n_train": len(X_train),
+                "n_val": len(X_val),
+                "n_test": len(X_test),
+            })
+    else:
+        logger.info("Using random splitting...")
+        preprocessor = DataPreprocessor(random_seed=args.seed)
+        X_train, X_test, y_train, y_test = preprocessor.split_data_simple(
+            X, y, test_size=0.2, stratify=(args.task == "classification")
+        )
+
+        if args.use_mlflow and HAS_MLFLOW and mlflow_run:
+            mlflow.log_params({
+                "n_train": len(X_train),
+                "n_test": len(X_test),
+            })
+
     # Scale features
+    preprocessor = DataPreprocessor(random_seed=args.seed)
     X_train_scaled = preprocessor.fit_transform(X_train)
     X_test_scaled = preprocessor.transform(X_test)
-    
+
     # Save scaler
-    scaler_path = output_dir / "qsar_scaler.pkl"
+    scaler_path = output_dir / "qsar_scaler.joblib"
     preprocessor.save(str(scaler_path))
     
     # ===== Step 5: Train Model =====
@@ -227,14 +318,15 @@ def main():
     
     # ===== Step 7: Save Results =====
     logger.info("Step 7: Saving results...")
-    
+
     # Save model
-    model_path = output_dir / "qsar_rf_model.pkl"
+    model_path = output_dir / "qsar_rf_model.joblib"
     model.save(str(model_path))
-    
+
     # Save metrics
     all_metrics = {
         "task": args.task,
+        "split_strategy": args.split,
         "n_samples_train": len(X_train),
         "n_samples_test": len(X_test),
         "n_features": len(feature_cols),
@@ -250,38 +342,66 @@ def main():
             "seed": args.seed,
         },
     }
-    
+
     metrics_path = output_dir / "qsar_metrics.json"
     with open(metrics_path, "w") as f:
         json.dump(all_metrics, f, indent=2)
-    
+
     # Save feature importance
     importance = model.get_feature_importance(top_n=20)
     importance_path = output_dir / "feature_importance.csv"
     importance.to_csv(importance_path, index=False)
-    
+
+    # MLflow logging
+    if args.use_mlflow and HAS_MLFLOW and mlflow_run:
+        # Log metrics
+        for key, value in test_metrics.items():
+            if isinstance(value, (int, float)):
+                mlflow.log_metric(f"test_{key}", value)
+
+        # Log CV metrics
+        for key, value in cv_results.items():
+            if isinstance(value, (int, float)) and not isinstance(value, (list, np.ndarray)):
+                mlflow.log_metric(f"cv_{key}", value)
+
+        # Log model
+        mlflow.sklearn.log_model(model.model, "qsar_model")
+
+        # Log artifacts
+        mlflow.log_artifact(str(model_path))
+        mlflow.log_artifact(str(metrics_path))
+        mlflow.log_artifact(str(importance_path))
+
+        # End run
+        mlflow.end_run()
+
     # ===== Summary =====
     logger.info("=" * 60)
     logger.info("TRAINING COMPLETE")
     logger.info("=" * 60)
-    
+
     if args.task == "classification":
         logger.info(f"Test ROC-AUC: {test_metrics['roc_auc']:.4f}")
+        if "pr_auc" in test_metrics:
+            logger.info(f"Test PR-AUC: {test_metrics['pr_auc']:.4f}")
         logger.info(f"CV ROC-AUC: {cv_results['roc_auc_mean']:.4f} ± {cv_results['roc_auc_std']:.4f}")
-        
+
         # Check target metric
         target_met = test_metrics['roc_auc'] >= 0.75
         logger.info(f"Target (ROC-AUC >= 0.75): {'✅ PASSED' if target_met else '❌ NOT MET'}")
     else:
         logger.info(f"Test R²: {test_metrics['r2']:.4f}")
         logger.info(f"CV R²: {cv_results['r2_mean']:.4f} ± {cv_results['r2_std']:.4f}")
-    
+
     logger.info(f"\nArtifacts saved to: {output_dir}")
     logger.info(f"  - Model: {model_path.name}")
     logger.info(f"  - Metrics: {metrics_path.name}")
     logger.info(f"  - Feature importance: {importance_path.name}")
     logger.info(f"  - Scaler: {scaler_path.name}")
-    
+
+    if args.use_mlflow and HAS_MLFLOW:
+        logger.info(f"  - MLflow: {mlflow.get_tracking_uri()}")
+
     return 0
 
 

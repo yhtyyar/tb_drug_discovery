@@ -18,7 +18,7 @@ from loguru import logger
 
 try:
     from torch_geometric.nn import (
-        GCNConv, GATConv, NNConv, 
+        GCNConv, GATConv, NNConv,
         global_mean_pool, global_add_pool, global_max_pool,
         BatchNorm, LayerNorm
     )
@@ -27,6 +27,13 @@ try:
 except ImportError:
     HAS_TORCH_GEOMETRIC = False
     logger.warning("PyTorch Geometric not installed")
+
+# Optional torch_scatter for efficient attention computation
+try:
+    from torch_scatter import scatter_softmax, scatter_add
+    HAS_TORCH_SCATTER = True
+except ImportError:
+    HAS_TORCH_SCATTER = False
 
 
 class BaseGNN(nn.Module):
@@ -429,37 +436,48 @@ class AttentiveFPModel(BaseGNN):
         """Forward pass with attentive readout."""
         x = self.get_embeddings(data)
         batch = data.batch
-        
+
         # Attentive readout over multiple timesteps
         # Initialize super-node for each graph
         num_graphs = batch.max().item() + 1
         h = torch.zeros(num_graphs, self.hidden_dim, device=x.device)
-        
+
         for _ in range(self.num_timesteps):
             # Compute attention weights
             attention_scores = self.graph_attention(x)
-            
-            # Scatter softmax per graph
-            attention_weights = torch.zeros_like(attention_scores)
-            for g in range(num_graphs):
-                mask = (batch == g)
-                attention_weights[mask] = F.softmax(attention_scores[mask], dim=0)
-            
-            # Weighted sum of node features per graph
-            context = torch.zeros(num_graphs, self.hidden_dim, device=x.device)
-            for g in range(num_graphs):
-                mask = (batch == g)
-                context[g] = (attention_weights[mask] * x[mask]).sum(dim=0)
-            
+
+            # Efficient scatter softmax per graph using torch_scatter if available
+            if HAS_TORCH_SCATTER:
+                # Fast GPU-accelerated version: O(N) instead of O(N×G)
+                attention_weights = scatter_softmax(attention_scores, batch, dim=0)
+                # Weighted sum using scatter_add
+                weighted = attention_weights * x
+                context = scatter_add(weighted, batch.unsqueeze(-1).expand_as(weighted), dim=0)
+                # Ensure correct shape (num_graphs, hidden_dim)
+                if context.shape[0] > num_graphs:
+                    context = context[:num_graphs]
+            else:
+                # Fallback: Python loop (slower but works without torch_scatter)
+                attention_weights = torch.zeros_like(attention_scores)
+                for g in range(num_graphs):
+                    mask = (batch == g)
+                    attention_weights[mask] = F.softmax(attention_scores[mask], dim=0)
+
+                # Weighted sum of node features per graph
+                context = torch.zeros(num_graphs, self.hidden_dim, device=x.device)
+                for g in range(num_graphs):
+                    mask = (batch == g)
+                    context[g] = (attention_weights[mask] * x[mask]).sum(dim=0)
+
             # Update with GRU
             h = self.gru(context, h)
-        
+
         # Output MLP
         out = self.output_mlp(h)
-        
+
         if self.task == 'classification' and self.output_dim == 1:
             out = torch.sigmoid(out)
-        
+
         return out.squeeze(-1)
 
 

@@ -11,6 +11,7 @@ from loguru import logger
 from sklearn.metrics import (
     accuracy_score,
     auc,
+    average_precision_score,
     confusion_matrix,
     f1_score,
     mean_absolute_error,
@@ -108,13 +109,16 @@ def calculate_classification_metrics(
         specificity = metrics["specificity"]
         metrics["balanced_accuracy"] = float((sensitivity + specificity) / 2)
     
-    # ROC-AUC if probabilities provided
+    # ROC-AUC and PR-AUC if probabilities provided
     if y_proba is not None:
         try:
             metrics["roc_auc"] = float(roc_auc_score(y_true, y_proba))
+            # PR-AUC is more informative for imbalanced data
+            metrics["pr_auc"] = float(average_precision_score(y_true, y_proba))
         except ValueError:
             metrics["roc_auc"] = 0.5  # Default for edge cases
-    
+            metrics["pr_auc"] = 0.0
+
     return metrics
 
 

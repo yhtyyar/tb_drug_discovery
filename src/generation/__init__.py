@@ -15,14 +15,14 @@ Classes:
     MolecularDiffusion: Diffusion model for molecules
 """
 
-from src.generation.tokenizer import SmilesTokenizer, create_vocabulary
-from src.generation.vae import SmilesVAE, VAEEncoder, VAEDecoder
-from src.generation.optimizer import LatentOptimizer, PropertyPredictor
-from src.generation.generator import MoleculeGenerator, validate_smiles, calculate_properties
+from .tokenizer import SmilesTokenizer, create_vocabulary
+from .vae import SmilesVAE, VAEEncoder, VAEDecoder, KLAnnealer
+from .optimizer import LatentOptimizer, PropertyPredictor
+from .generator import MoleculeGenerator, validate_smiles, calculate_properties
 
 # Diffusion models (may not be available if dependencies missing)
 try:
-    from src.generation.diffusion import (
+    from .diffusion import (
         MolecularDiffusion,
         DiffusionConfig,
         NoiseScheduler,
@@ -45,6 +45,7 @@ __all__ = [
     "MoleculeGenerator",
     "validate_smiles",
     "calculate_properties",
+    "KLAnnealer",
 ]
 
 if HAS_DIFFUSION:
