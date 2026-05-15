@@ -45,3 +45,63 @@ logging:
 hardware:
   n_jobs: -1  # Use all CPUs
   device: "cpu"  # cpu or cuda
+
+# GNN settings
+gnn:
+  model_type: "attentivefp"  # gcn | gat | mpnn | attentivefp
+  hidden_dim: 128
+  num_layers: 3
+  dropout: 0.2
+  num_heads: 4  # GAT only
+  task: "classification"
+  batch_size: 32
+  learning_rate: 1e-3
+  epochs: 100
+  patience: 20  # early stopping
+  use_scaffold_split: true  # CRITICAL: always use scaffold split for QSAR
+
+# VAE settings
+vae:
+  latent_dim: 256
+  hidden_dim: 512
+  embed_dim: 128
+  num_layers: 2
+  dropout: 0.2
+  max_length: 120
+  kl_weight_start: 0.0
+  kl_weight_end: 1.0
+  kl_anneal_epochs: 50
+  batch_size: 64
+  learning_rate: 1e-3
+  epochs: 100
+
+# Diffusion settings
+diffusion:
+  latent_dim: 256
+  hidden_dim: 512
+  num_layers: 4
+  num_timesteps: 1000
+  scheduler_type: "cosine"
+  use_self_condition: true
+  guidance_scale: 2.0
+  num_inference_steps: 50
+  batch_size: 128
+  learning_rate: 1e-4
+  epochs: 200
+
+# Generation quality thresholds (minimum acceptable values)
+generation_thresholds:
+  min_validity: 0.80
+  min_uniqueness: 0.90
+  min_novelty: 0.70
+  min_qed_mean: 0.30
+  min_ro5_pass_rate: 0.50
+  max_sa_mean: 6.0  # SA score < 6 = synthetically accessible
+
+# Data splitting strategy
+splitting:
+  method: "scaffold"  # scaffold | random — always prefer scaffold for QSAR
+  frac_train: 0.70
+  frac_val: 0.15
+  frac_test: 0.15
+  scaffold_generic: false

@@ -1,0 +1,5 @@
+{
+  "qsar_regression_r2": 0.85,
+  "qsar_regression_rmse": 0.45,
+  "qsar_classification_roc_auc": 0.90
+}
